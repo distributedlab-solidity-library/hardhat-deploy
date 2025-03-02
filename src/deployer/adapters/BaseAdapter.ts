@@ -1,7 +1,6 @@
 import {
   BaseContract,
   BaseContractMethod,
-  ContractFactory,
   ContractRunner,
   ContractTransaction,
   ContractTransactionReceipt,
@@ -14,14 +13,12 @@ import {
 import { Adapter } from "./Adapter";
 import { MinimalContract } from "../MinimalContract";
 
-import "../../type-extensions";
-
 import { UNKNOWN_TRANSACTION_NAME } from "../../constants";
 
 import { bytecodeToString, fillParameters, getMethodString } from "../../utils";
 
+import { Instance } from "../../types/adapter";
 import { OverridesAndLibs, OverridesAndName } from "../../types/deployer";
-import { EthersContract, BytecodeFactory } from "../../types/adapter";
 import { KeyTransactionFields, MigrationMetadata, TransactionFieldsToSave } from "../../types/tools";
 
 import { Stats } from "../../tools/Stats";
@@ -30,23 +27,21 @@ import { networkManager } from "../../tools/network/NetworkManager";
 import { TransactionRunner } from "../../tools/runners/TransactionRunner";
 import { TransactionProcessor } from "../../tools/storage/TransactionProcessor";
 
-type Factory<A, I> = EthersContract<A, I> | BytecodeFactory | ContractFactory;
-
-export abstract class AbstractEthersAdapter extends Adapter {
-  public getRawBytecode<A, I>(instance: Factory<A, I>): string {
+export abstract class BaseAdapter extends Adapter {
+  public getRawBytecode<A, I>(instance: Instance<A, I>): string {
     return bytecodeToString(instance.bytecode);
   }
 
-  public async fromInstance<A, I>(instance: Factory<A, I>, parameters: OverridesAndName): Promise<MinimalContract> {
+  public async fromInstance<A, I>(instance: Instance<A, I>, parameters: OverridesAndName): Promise<MinimalContract> {
     return new MinimalContract(
       this._hre,
       this.getRawBytecode(instance),
-      this.getRawAbi(instance),
+      this.getInterface(instance),
       this.getContractName(instance, parameters),
     );
   }
 
-  public async toInstance<A, I>(instance: Factory<A, I>, address: string, parameters: OverridesAndLibs): Promise<I> {
+  public async toInstance<A, I>(instance: Instance<A, I>, address: string, parameters: OverridesAndLibs): Promise<I> {
     const signer = await networkManager!.getSigner(parameters.from);
     const contractName = this.getContractName(instance, parameters);
 
@@ -139,7 +134,7 @@ export abstract class AbstractEthersAdapter extends Adapter {
   ): (...args: any[]) => Promise<ContractTransactionResponse> {
     return async (...args: any[]): Promise<ContractTransactionResponse> => {
       const tx = await oldMethod.populateTransaction(...args);
-      tx.from = (runner as any).address;
+      tx.from = (runner as any).address || (await (runner as any).getAddress());
 
       await fillParameters(tx);
 
@@ -147,7 +142,7 @@ export abstract class AbstractEthersAdapter extends Adapter {
 
       const keyFields = this._getKeyFieldsFromTransaction(tx);
 
-      if (this._hre.config.migrate.continue) {
+      if (this._hre.config.migrate.execution.continue) {
         return this._recoverTransaction(methodString, keyFields, oldMethod, args);
       }
 
@@ -164,7 +159,7 @@ export abstract class AbstractEthersAdapter extends Adapter {
     try {
       const savedTransaction = TransactionProcessor?.tryRestoreSavedTransaction(tx);
 
-      Reporter!.notifyTransactionRecovery(methodString);
+      Reporter!.notifyTransactionRecovery(methodString, savedTransaction!);
 
       return this._wrapTransactionFieldsToSave(savedTransaction!);
     } catch {
